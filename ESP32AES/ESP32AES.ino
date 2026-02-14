@@ -54,7 +54,7 @@ const uint8_t zhe_data[] = {0b00000000,0b00000010,0b00000101,0b00000000,0b000000
 const uint8_t sen_data[] = {0b00000000,0b00000000,0b00000000,0b00000101,0b00111111,0b00000000,0b00000000,0b00000000};
 const uint8_t shen_data[] = {0b00000100,0b00001010,0b00000000,0b00000101,0b00111111,0b00000000,0b00000000,0b00000000};
 const uint8_t ain_data[] = {0b00000000,0b00000000,0b00000011,0b00000100,0b00111111,0b00000000,0b00000000,0b00000000};
-const uint8_t ghain_data[] = {0b00000010,0b00000000,0b00000011,0b00000100,0b00111111,0b00000000,0b00000000,0b00000000};
+const uint8_t ghain_data[] = {0b00000010,0b00001000,0b00010100,0b00000010,0b00111111,0b00000000,0b00000000,0b00000000};
 const uint8_t fe_data[] = {0b00000010,0b00000000,0b00000111,0b00000101,0b00111111,0b00000000,0b00000000,0b00000000};
 const uint8_t qe_data[] = {0b00000101,0b00000000,0b00000111,0b00000101,0b00111111,0b00000000,0b00000000,0b00000000};
 const uint8_t swat_data[] = {0b00000000,0b00000000,0b00000111,0b00001001,0b00111111,0b00000000,0b00000000,0b00000000};
@@ -334,10 +334,10 @@ int scrollOffset = 0;
 int maxScrollOffset = 0;
 bool autoScroll = true;
 
-// Typing buffer with horizontal scrolling
+// Typing buffer with vertical expansion
 String typingBuffer = "";
 int cursorPosition = 0;
-int typingScrollOffset = 0;
+int typingLines = 1; // Start with 1 line
 
 // Current message being composed (for display)
 String currentMessageForDisplay = "";
@@ -350,38 +350,33 @@ bool persianMode = false;
 #define SCREEN_WIDTH 320
 #define SCREEN_HEIGHT 240
 
-// Chat area
-#define CHAT_AREA_X 5
-#define CHAT_AREA_Y 30
-#define CHAT_AREA_WIDTH 310
-#define CHAT_AREA_HEIGHT 140
-#define MAX_DISPLAY_LINES 7
-#define LINE_HEIGHT 20
+// UI Constants
+#define MAX_TYPING_LINES 5
+#define TYPING_LINE_HEIGHT 20
+#define TYPING_MIN_HEIGHT 25
+#define TYPING_MAX_HEIGHT (MAX_TYPING_LINES * TYPING_LINE_HEIGHT)
 #define CHARS_PER_LINE 21
-
-// Typing area
-#define TYPING_AREA_X 5
-#define TYPING_AREA_Y 175
-#define TYPING_AREA_WIDTH 310
-#define TYPING_VISIBLE_WIDTH 270
-#define TYPING_AREA_HEIGHT 25
-#define TYPING_MAX_CHARS 500
-#define CHAR_WIDTH 12
-#define PROMPT_WIDTH 20
-
-// Scroll buttons (vertical)
-#define SCROLL_UP_X 295
-#define SCROLL_UP_Y 35
-#define SCROLL_DOWN_X 295
-#define SCROLL_DOWN_Y 155
 #define SCROLL_BTN_SIZE 10
 
-// Typing scroll indicators (horizontal)
-#define TYPING_SCROLL_LEFT_X 5
-#define TYPING_SCROLL_LEFT_Y 183
-#define TYPING_SCROLL_RIGHT_X 303
-#define TYPING_SCROLL_RIGHT_Y 183
-#define TYPING_SCROLL_SIZE 6
+// Chat area - will be adjusted based on typing area height
+int CHAT_AREA_X = 5;
+int CHAT_AREA_Y = 30;
+int CHAT_AREA_WIDTH = 310;
+int CHAT_AREA_HEIGHT = 140; // Will be adjusted
+int MAX_DISPLAY_LINES = 7;
+int LINE_HEIGHT = 20;
+
+// Typing area - dynamically positioned
+int TYPING_AREA_X = 5;
+int TYPING_AREA_Y = 175; // Will be adjusted based on height
+int TYPING_AREA_WIDTH = 310;
+int TYPING_AREA_HEIGHT = TYPING_MIN_HEIGHT; // Start with minimum height
+
+// Scroll buttons (vertical)
+int SCROLL_UP_X = 295;
+int SCROLL_UP_Y = 35;
+int SCROLL_DOWN_X = 295;
+int SCROLL_DOWN_Y = 155; // Will be adjusted
 
 // UI Colors
 uint16_t bgColor = TFT_BLACK;
@@ -404,14 +399,19 @@ bool needsDisplayUpdate = true;
 unsigned long lastCursorBlink = 0;
 bool cursorVisible = true;
 
-// Serial input buffer
-String serialInputBuffer = "";
+// Serial input buffer for receiving complete encrypted messages
+String serialBuffer = "";
+unsigned long lastSerialCharTime = 0;
+#define SERIAL_TIMEOUT 100  // Timeout in ms to detect end of message
 
 // Function prototypes
 String encryptMessage(const String &plaintext);
 String decryptMessage(const String &encryptedHex);
 void addMessageToDisplay(const String& text, bool fromSerial, bool isPersian = false);
 bool containsPersianTokens(const String& str);
+void adjustUILayout();
+int calculateLinesInBuffer(const String& buffer);
+void wrapTextToLines(String& buffer, int maxCharsPerLine);
 
 // Convert HID keycode to ASCII or Persian token - FIXED VERSION
 char keycodeToChar(uint8_t keycode, uint8_t modifiers) {
@@ -429,29 +429,6 @@ char keycodeToChar(uint8_t keycode, uint8_t modifiers) {
     if (keycode == 58) return 0xF1; // F1 - Clear chat
     if (keycode == 59) return 0xF2; // F2 - Clear typing
     if (keycode == 60) return 0xF3; // F3 - Toggle Persian mode
-    
-    // Handle Persian special characters FIRST
-    // if (persianMode) {
-    //     // Special Persian characters that need specific handling
-    //     if (keycode == 47) { // [ key
-    //         return isShift ? '[' : '['; // Keep as [ for Persian mapping
-    //     }
-    //     if (keycode == 48) { // ] key
-    //         return isShift ? ']' : ']'; // Keep as ] for Persian mapping
-    //     }
-    //     if (keycode == 49) { // \ key
-    //         return isShift ? '\\' : '\\'; // Keep as \ for Persian mapping
-    //     }
-    //     if (keycode == 51) { // ; key
-    //         return isShift ? ';' : ';'; // Keep as ; for Persian mapping
-    //     }
-    //     if (keycode == 52) { // ' key
-    //         return isShift ? '\'' : '\''; // Keep as ' for Persian mapping
-    //     }
-    //     if (keycode == 54) { // , key
-    //         return isShift ? ',' : ','; // Keep as , for Persian mapping
-    //     }
-    // }
     
     // COMMON KEYS - SHARED BY BOTH MODES
     // Numbers 1-9
@@ -480,16 +457,14 @@ char keycodeToChar(uint8_t keycode, uint8_t modifiers) {
     // Tab
     if (keycode == 43) return '\t';
     
-    // Special characters - For English mode, handle normally
-    // if (!persianMode) {
-        if (keycode == 49) return isShift ? '|' : '\\';
-        if (keycode == 47) return isShift ? '{' : '[';
-        if (keycode == 48) return isShift ? '}' : ']';
-        
-        if (keycode == 54) return isShift ? '<' : ',';
-        if (keycode == 52) return isShift ? '"' : '\'';
-        if (keycode == 51) return isShift ? ':' : ';';
-    // }
+    // Special characters
+    if (keycode == 49) return isShift ? '|' : '\\';
+    if (keycode == 47) return isShift ? '{' : '[';
+    if (keycode == 48) return isShift ? '}' : ']';
+    
+    if (keycode == 54) return isShift ? '<' : ',';
+    if (keycode == 52) return isShift ? '"' : '\'';
+    if (keycode == 51) return isShift ? ':' : ';';
     
     // Other symbols that work in both modes
     if (keycode == 45) return isShift ? '_' : '-';
@@ -497,6 +472,7 @@ char keycodeToChar(uint8_t keycode, uint8_t modifiers) {
     if (keycode == 53) return isShift ? '~' : '`';
     if (keycode == 55) return isShift ? '>' : '.';
     if (keycode == 56) return isShift ? '?' : '/';
+    
     // Now handle Persian vs English mode for letters
     if (keycode >= 4 && keycode <= 29) {
         if (persianMode) {
@@ -523,25 +499,20 @@ char keycodeToChar(uint8_t keycode, uint8_t modifiers) {
 
 // Helper function to detect if a string contains Persian tokens
 bool containsPersianTokens(const String& str) {
-    // Check if string contains Persian letter tokens (a-z for Persian mapping)
-    // Persian messages will have sequences of these tokens
     int persianTokenCount = 0;
     int totalCharCount = 0;
     
     for (int i = 0; i < str.length(); i++) {
         char c = str.charAt(i);
-        // Skip whitespace and punctuation for detection
         if (c != ' ' && c != '\n' && c != '.' && c != ',' && c != '!' && c != '?') {
             totalCharCount++;
             
-            // Check if character is a Persian token
             if ((c >= 'a' && c <= 'z') || c == 'A' || c == 'C') {
                 persianTokenCount++;
             }
         }
     }
     
-    // If we have at least 2 characters and more than 70% are Persian tokens, likely Persian
     if (totalCharCount >= 2) {
         if (persianTokenCount * 100 / totalCharCount > 70) {
             return true;
@@ -549,6 +520,63 @@ bool containsPersianTokens(const String& str) {
     }
     
     return false;
+}
+
+// Calculate how many lines are needed for the typing buffer
+int calculateLinesInBuffer(const String& buffer) {
+    if (buffer.length() == 0) return 1;
+    
+    int lines = 1;
+    int currentLineLength = 0;
+    
+    for (int i = 0; i < buffer.length(); i++) {
+        char c = buffer.charAt(i);
+        
+        if (c == '\n') {
+            lines++;
+            currentLineLength = 0;
+        } else {
+            // For Persian mode, each Persian character counts as 1 character for line calculation
+            // For English mode, each character counts as 1
+            currentLineLength++;
+            
+            // If line exceeds maximum characters, wrap to next line
+            if (currentLineLength >= CHARS_PER_LINE) {
+                lines++;
+                currentLineLength = 0;
+            }
+        }
+    }
+    
+    // Limit to maximum lines
+    if (lines > MAX_TYPING_LINES) {
+        lines = MAX_TYPING_LINES;
+    }
+    
+    return lines;
+}
+
+// Adjust UI layout based on typing area height
+void adjustUILayout() {
+    // Calculate typing area height based on number of lines
+    typingLines = calculateLinesInBuffer(typingBuffer);
+    TYPING_AREA_HEIGHT = TYPING_MIN_HEIGHT + ((typingLines - 1) * TYPING_LINE_HEIGHT);
+    if (TYPING_AREA_HEIGHT > TYPING_MAX_HEIGHT) {
+        TYPING_AREA_HEIGHT = TYPING_MAX_HEIGHT;
+    }
+    
+    // Adjust typing area position (move up as it gets taller)
+    TYPING_AREA_Y = SCREEN_HEIGHT - TYPING_AREA_HEIGHT - 40; // 40px for footer
+    
+    // Adjust chat area height based on typing area position
+    CHAT_AREA_HEIGHT = TYPING_AREA_Y - CHAT_AREA_Y - 5;
+    
+    // Adjust scroll down button position
+    SCROLL_DOWN_Y = CHAT_AREA_Y + CHAT_AREA_HEIGHT - SCROLL_BTN_SIZE - 2;
+    
+    // Recalculate max display lines based on new chat area height
+    MAX_DISPLAY_LINES = CHAT_AREA_HEIGHT / LINE_HEIGHT;
+    if (MAX_DISPLAY_LINES < 1) MAX_DISPLAY_LINES = 1;
 }
 
 // Add COMPLETE message to display
@@ -577,8 +605,6 @@ void addMessageToDisplay(const String& text, bool fromSerial, bool isPersian) {
                 
                 if (isPersian) {
                     // For Persian, split based on visible Persian characters
-                    // Each Persian token maps to 1 Persian character
-                    // Approx 21 Persian characters per line
                     int takeLen = min((int)line.length(), CHARS_PER_LINE);
                     msg.text = line.substring(0, takeLen);
                     msg.isPersian = true;
@@ -650,6 +676,7 @@ void addMessageToDisplay(const String& text, bool fromSerial, bool isPersian) {
 }
 
 // Send typing buffer as ONE COMPLETE ENCRYPTED MESSAGE
+// Replace the sendTypingBuffer() function with this version:
 void sendTypingBuffer() {
     if (typingBuffer.length() > 0) {
         // ENTIRE MESSAGE encrypted as ONE
@@ -658,16 +685,25 @@ void sendTypingBuffer() {
         // Add COMPLETE message to display
         addMessageToDisplay(typingBuffer, false, persianMode);
         
-        // Send SINGLE encrypted string via Serial
+        // Send SINGLE encrypted string via Serial - ONE LINE ONLY
+        // Flush any pending data
+        Serial.flush();
+        
+        // Send the complete encrypted string in ONE write operation
         Serial.println(encrypted);
+        
+        // Wait a bit to ensure transmission completes
+        delay(10);
         
         // RESET everything for next message
         typingBuffer = "";
         cursorPosition = 0;
-        typingScrollOffset = 0;
+        typingLines = 1;
         currentMessageForDisplay = "";
         isComposingMessage = false;
         
+        // Adjust UI layout back to minimum height
+        adjustUILayout();
         needsDisplayUpdate = true;
     }
 }
@@ -677,29 +713,35 @@ String encryptMessage(const String &plaintext) {
     if (plaintext.length() == 0) return "";
     
     // Calculate padded length
-    int paddedLen = ((plaintext.length() + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE;
+    int plaintextLen = plaintext.length();
+    int paddedLen = ((plaintextLen + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE;
+    
+    // Allocate memory for padded text and ciphertext
     uint8_t *paddedText = new uint8_t[paddedLen];
     uint8_t *ciphertext = new uint8_t[paddedLen];
     
     // Copy plaintext
-    memcpy(paddedText, plaintext.c_str(), plaintext.length());
+    memcpy(paddedText, plaintext.c_str(), plaintextLen);
     
     // Add PKCS7 padding
-    uint8_t padValue = BLOCK_SIZE - (plaintext.length() % BLOCK_SIZE);
-    for (int i = plaintext.length(); i < paddedLen; i++) {
+    uint8_t padValue = BLOCK_SIZE - (plaintextLen % BLOCK_SIZE);
+    if (padValue == 0) padValue = BLOCK_SIZE; // If plaintext is exact multiple
+    
+    for (int i = plaintextLen; i < paddedLen; i++) {
         paddedText[i] = padValue;
     }
     
-    // Encrypt ENTIRE message
+    // Encrypt ENTIRE message - ONE COMPLETE CIPHERTEXT
     for (int i = 0; i < paddedLen; i += BLOCK_SIZE) {
         aes256.encryptBlock(ciphertext + i, paddedText + i);
     }
     
-    // Convert to hex string
+    // Convert to SINGLE hex string
     String hexString = "";
     for (int i = 0; i < paddedLen; i++) {
-        if (ciphertext[i] < 0x10) hexString += "0";
-        hexString += String(ciphertext[i], HEX);
+        char hex[3];
+        sprintf(hex, "%02x", ciphertext[i]);
+        hexString += hex;
     }
     
     delete[] paddedText;
@@ -712,12 +754,26 @@ String encryptMessage(const String &plaintext) {
 String decryptMessage(const String &encryptedHex) {
     if (encryptedHex.length() == 0) return "";
     
+    // Hex string must be even length
+    if (encryptedHex.length() % 2 != 0) {
+        Serial.println("Error: Invalid hex string length");
+        return "";
+    }
+    
     // Convert hex to bytes
     int hexLen = encryptedHex.length();
     int byteLen = hexLen / 2;
+    
+    // Check if byteLen is multiple of BLOCK_SIZE
+    if (byteLen % BLOCK_SIZE != 0) {
+        Serial.println("Error: Ciphertext length not multiple of block size");
+        return "";
+    }
+    
     uint8_t *ciphertext = new uint8_t[byteLen];
     uint8_t *plaintext = new uint8_t[byteLen];
     
+    // Convert hex string to bytes
     for (int i = 0; i < byteLen; i++) {
         char hex[3];
         hex[0] = encryptedHex.charAt(i * 2);
@@ -734,7 +790,18 @@ String decryptMessage(const String &encryptedHex) {
     // Remove PKCS7 padding
     uint8_t padValue = plaintext[byteLen - 1];
     if (padValue > 0 && padValue <= BLOCK_SIZE) {
-        byteLen -= padValue;
+        // Verify padding
+        bool validPadding = true;
+        for (int i = byteLen - padValue; i < byteLen; i++) {
+            if (plaintext[i] != padValue) {
+                validPadding = false;
+                break;
+            }
+        }
+        
+        if (validPadding) {
+            byteLen -= padValue;
+        }
     }
     
     // Convert to string
@@ -751,6 +818,9 @@ String decryptMessage(const String &encryptedHex) {
 
 // Check if string is valid hex
 bool isHexString(const String &str) {
+    if (str.length() == 0) return false;
+    if (str.length() % 2 != 0) return false; // Hex strings should have even length
+    
     for (size_t i = 0; i < str.length(); i++) {
         char c = str.charAt(i);
         if (!((c >= '0' && c <= '9') || 
@@ -762,23 +832,41 @@ bool isHexString(const String &str) {
     return true;
 }
 
-// Process serial input
+// Replace the processSerialInput() function with this version:
 void processSerialInput() {
-    String s = "";
-    char c;
     while (Serial.available()) {
-        c = Serial.read();
-        s.concat(c);
+        char c = Serial.read();
+        serialBuffer += c;
+        lastSerialCharTime = millis();
     }
-    if(s != ""){
-        if(isHexString(s)){
-            String decrypted = decryptMessage(s);
+    
+    // Check for complete lines (ending with newline)
+    if (serialBuffer.length() > 0) {
+        int newlinePos = serialBuffer.indexOf('\n');
+        if (newlinePos != -1) {
+            // Extract the complete message (including the newline)
+            String message = serialBuffer.substring(0, newlinePos + 1);
+            // Remove the processed part from buffer
+            serialBuffer = serialBuffer.substring(newlinePos + 1);
             
-            // Use the current persianMode setting for received messages
-            addMessageToDisplay(decrypted, true, persianMode);
-        } else {
-            // Not encrypted hex, display as-is but use current mode
-            addMessageToDisplay(s, true, persianMode);
+            // Trim whitespace
+            message.trim();
+            
+            if (message.length() > 0) {
+                if (isHexString(message)) {
+                    // This is an encrypted message - decrypt it
+                    String decrypted = decryptMessage(message);
+                    if (decrypted.length() > 0) {
+                        // Use the current persianMode setting for received messages
+                        addMessageToDisplay(decrypted, true, persianMode);
+                    } else {
+                        Serial.println("Error: Decryption failed for message: " + message);
+                    }
+                } else {
+                    // Not encrypted hex, display as-is but use current mode
+                    addMessageToDisplay(message, true, persianMode);
+                }
+            }
         }
     }
 }
@@ -802,16 +890,16 @@ void drawUI() {
     // Separator
     tft.drawFastHLine(5, 25, 310, borderColor);
     
-    // Chat area border
-    tft.drawRect(5, 30, 310, 140, TFT_WHITE);
+    // Chat area border (dynamic position)
+    tft.drawRect(CHAT_AREA_X, CHAT_AREA_Y, CHAT_AREA_WIDTH, CHAT_AREA_HEIGHT, TFT_WHITE);
     
-    // Typing area border
-    tft.drawRect(5, 175, 310, 25, TFT_YELLOW);
+    // Typing area border (dynamic position and height)
+    tft.drawRect(TYPING_AREA_X, TYPING_AREA_Y, TYPING_AREA_WIDTH, TYPING_AREA_HEIGHT, TFT_YELLOW);
     
     // Footer info
     tft.setTextColor(infoColor);
     tft.setTextSize(1);
-    tft.setCursor(10, 220);
+    tft.setCursor(10, SCREEN_HEIGHT - 20);
     tft.print("Shift+Enter:Send  F3:Toggle Lang  Arrows:Navigate");
 }
 
@@ -875,7 +963,7 @@ void displayChat() {
         displayLine++;
     }
     
-    // Draw scroll buttons
+    // Draw scroll buttons (adjusted positions)
     uint16_t upColor = scrollOffset > 0 ? scrollBtnActive : scrollBtnInactive;
     tft.fillTriangle(
         SCROLL_UP_X, SCROLL_UP_Y + SCROLL_BTN_SIZE,
@@ -893,112 +981,134 @@ void displayChat() {
     );
 }
 
-// Display typing area with proper RTL/LTR handling
+// Helper function to wrap text into multiple lines for display
+void getWrappedText(const String& text, String* lines, int& lineCount, int maxCharsPerLine) {
+    lineCount = 0;
+    String currentLine = "";
+    
+    for (int i = 0; i < text.length() && lineCount < MAX_TYPING_LINES; i++) {
+        char c = text.charAt(i);
+        
+        if (c == '\n') {
+            // End of line
+            lines[lineCount++] = currentLine;
+            currentLine = "";
+        } else if (currentLine.length() >= maxCharsPerLine) {
+            // Line is full, start new line
+            lines[lineCount++] = currentLine;
+            currentLine = String(c);
+        } else {
+            currentLine += c;
+        }
+    }
+    
+    // Add the last line if not empty
+    if (currentLine.length() > 0 && lineCount < MAX_TYPING_LINES) {
+        lines[lineCount++] = currentLine;
+    }
+}
+
+// Display typing area with vertical expansion
 void displayTyping() {
-    // Clear typing area
+    // Clear typing area (with dynamic height)
     tft.fillRect(TYPING_AREA_X + 1, TYPING_AREA_Y + 1, TYPING_AREA_WIDTH - 2, TYPING_AREA_HEIGHT - 2, bgColor);
     
-    // Typing prompt
-    tft.setTextColor(typingColor);
-    tft.setTextSize(2);
-    tft.setCursor(TYPING_AREA_X + 10, TYPING_AREA_Y + 5);
-    tft.print("> ");
+    // Wrap text into multiple lines
+    String lines[MAX_TYPING_LINES];
+    int lineCount = 0;
+    getWrappedText(typingBuffer, lines, lineCount, CHARS_PER_LINE);
     
-    if (persianMode) {
-        // Draw Persian text in typing area using the improved function
-        // Start from right edge of typing area for RTL
-        int textX = TYPING_AREA_X + TYPING_AREA_WIDTH - 5; // 5px from right edge
+    // Display each line
+    for (int lineIdx = 0; lineIdx < lineCount; lineIdx++) {
+        int yPos = TYPING_AREA_Y + 5 + (lineIdx * TYPING_LINE_HEIGHT);
         
-        // Draw the Persian text (including numbers in LTR)
-        drawPersianText(typingBuffer.c_str(), textX, TYPING_AREA_Y + 5, 2, typingColor, bgColor);
+        // Draw prompt for first line only
+        if (lineIdx == 0) {
+            tft.setTextColor(typingColor);
+            tft.setTextSize(2);
+            tft.setCursor(TYPING_AREA_X + 10, yPos);
+            tft.print("> ");
+        }
+        
+        // Calculate starting X position
+        int startX = TYPING_AREA_X + (lineIdx == 0 ? 30 : 10); // Indent for prompt on first line
+        
+        if (persianMode) {
+            // Draw Persian text
+            // Calculate starting X position for RTL text
+            int textWidth = lines[lineIdx].length() * 12; // Approximate width
+            int textX = TYPING_AREA_X + TYPING_AREA_WIDTH - 10; // Start from right
+            
+            // Adjust for prompt on first line
+            if (lineIdx == 0) {
+                textX -= 20; // Make room for prompt
+            }
+            
+            drawPersianText(lines[lineIdx].c_str(), textX, yPos, 2, typingColor, bgColor);
+        } else {
+            // Draw English text
+            tft.setTextColor(typingColor);
+            tft.setTextSize(2);
+            tft.setCursor(startX, yPos);
+            tft.print(lines[lineIdx]);
+        }
+    }
+    
+    // Calculate cursor position in wrapped lines
+    if (cursorVisible) {
+        // Find which line and position the cursor is in
+        int currentLine = 0;
+        int lineStart = 0;
+        int cursorLinePos = 0;
+        
+        for (int i = 0; i <= cursorPosition && currentLine < MAX_TYPING_LINES; i++) {
+            if (i == cursorPosition) {
+                cursorLinePos = i - lineStart;
+                break;
+            }
+            
+            if (typingBuffer.charAt(i) == '\n' || 
+                (i - lineStart) >= CHARS_PER_LINE) {
+                currentLine++;
+                lineStart = i + 1;
+            }
+        }
         
         // Calculate cursor position
-        if (cursorVisible) {
-            int cursorX = TYPING_AREA_X + 30; // Default after prompt
+        int cursorX, cursorY;
+        
+        if (persianMode) {
+            // For Persian mode, cursor is at end of text (RTL)
+            String lineText = lines[currentLine];
+            int cursorPosInLine = min(cursorLinePos, (int)lineText.length());
             
-            // Calculate width of text before cursor position
-            int totalWidth = 0;
-            for (int i = 0; i < cursorPosition; i++) {
-                char c = typingBuffer.charAt(i);
+            // Calculate width of text before cursor
+            int textBeforeCursorWidth = 0;
+            for (int i = 0; i < cursorPosInLine; i++) {
+                char c = lineText.charAt(i);
                 const Glyph* glyph = getGlyphForChar(c);
                 
                 if (glyph) {
-                    totalWidth += (glyph->width * 2); // Persian glyph width
+                    textBeforeCursorWidth += (glyph->width * 2);
                 } else if (c == ' ') {
-                    totalWidth += 6; // Space width
+                    textBeforeCursorWidth += 6;
                 } else {
-                    totalWidth += 12; // Regular character width (numbers, symbols)
+                    textBeforeCursorWidth += 12;
                 }
             }
             
-            cursorX = TYPING_AREA_X + 10 + 24 + totalWidth; // 24 = width of "> " prompt
+            cursorX = TYPING_AREA_X + TYPING_AREA_WIDTH - 10 - textBeforeCursorWidth;
+            if (currentLine == 0) cursorX -= 20; // Adjust for prompt
             
-            int cursorY = TYPING_AREA_Y + 20;
-            tft.fillRect(cursorX, cursorY, 8, 3, cursorColor);
-        }
-    } else {
-        // Display English text (original logic)
-        int maxVisibleChars = (TYPING_VISIBLE_WIDTH - PROMPT_WIDTH) / CHAR_WIDTH;
-        int bufferLength = typingBuffer.length();
-        
-        // Adjust scroll offset to keep cursor visible
-        if (cursorPosition - typingScrollOffset >= maxVisibleChars - 1) {
-            typingScrollOffset = cursorPosition - (maxVisibleChars - 2);
-        } else if (cursorPosition < typingScrollOffset) {
-            typingScrollOffset = cursorPosition;
+        } else {
+            // For English mode
+            cursorX = TYPING_AREA_X + (currentLine == 0 ? 30 : 10) + (cursorLinePos * 12);
         }
         
-        // Ensure scroll offset stays within bounds
-        if (typingScrollOffset < 0) typingScrollOffset = 0;
+        cursorY = TYPING_AREA_Y + 20 + (currentLine * TYPING_LINE_HEIGHT);
         
-        // FIXED: Cast to int for max function
-        int maxTypingScroll = max(0, (int)(bufferLength - maxVisibleChars + 1));
-        
-        if (typingScrollOffset > maxTypingScroll) {
-            typingScrollOffset = maxTypingScroll;
-        }
-        
-        // Display visible portion of typing buffer
-        int displayStart = typingScrollOffset;
-        int displayEnd = min(displayStart + maxVisibleChars, bufferLength);
-        
-        if (displayStart < displayEnd) {
-            String visibleText = typingBuffer.substring(displayStart, displayEnd);
-            tft.print(visibleText);
-        }
-        
-        // Blinking cursor (only for English mode)
-        if (cursorVisible) {
-            int cursorX = TYPING_AREA_X + 10 + 14 + ((cursorPosition - typingScrollOffset) * CHAR_WIDTH);
-            
-            if (cursorPosition - typingScrollOffset < 0) {
-                cursorX = TYPING_AREA_X + 10 + 14;
-            }
-            
-            int cursorY = TYPING_AREA_Y + 20;
-            tft.fillRect(cursorX, cursorY, 8, 3, cursorColor);
-        }
-        
-        // Draw horizontal scroll indicators (only for English mode)
-        int bufferLength2 = typingBuffer.length();
-        int maxVisibleChars2 = (TYPING_VISIBLE_WIDTH - PROMPT_WIDTH) / CHAR_WIDTH;
-        int maxTypingScroll2 = max(0, (int)(bufferLength2 - maxVisibleChars2 + 1));
-        
-        uint16_t leftColor = typingScrollOffset > 0 ? scrollBtnActive : scrollBtnInactive;
-        tft.fillTriangle(
-            TYPING_SCROLL_LEFT_X + TYPING_SCROLL_SIZE, TYPING_SCROLL_LEFT_Y + TYPING_SCROLL_SIZE/2,
-            TYPING_SCROLL_LEFT_X, TYPING_SCROLL_LEFT_Y,
-            TYPING_SCROLL_LEFT_X, TYPING_SCROLL_LEFT_Y + TYPING_SCROLL_SIZE,
-            leftColor
-        );
-        
-        uint16_t rightColor = typingScrollOffset < maxTypingScroll2 ? scrollBtnActive : scrollBtnInactive;
-        tft.fillTriangle(
-            TYPING_SCROLL_RIGHT_X, TYPING_SCROLL_RIGHT_Y + TYPING_SCROLL_SIZE/2,
-            TYPING_SCROLL_RIGHT_X + TYPING_SCROLL_SIZE, TYPING_SCROLL_RIGHT_Y,
-            TYPING_SCROLL_RIGHT_X + TYPING_SCROLL_SIZE, TYPING_SCROLL_RIGHT_Y + TYPING_SCROLL_SIZE,
-            rightColor
-        );
+        // Draw cursor
+        tft.fillRect(cursorX, cursorY, 8, 3, cursorColor);
     }
 }
 
@@ -1031,9 +1141,10 @@ void handleFunctionKey(char funcKey) {
             autoScroll = true;
             typingBuffer = "";
             cursorPosition = 0;
-            typingScrollOffset = 0;
+            typingLines = 1;
             currentMessageForDisplay = "";
             isComposingMessage = false;
+            adjustUILayout();
             needsDisplayUpdate = true;
             Serial.println("All messages cleared");
             break;
@@ -1041,9 +1152,10 @@ void handleFunctionKey(char funcKey) {
         case 0xF2:
             typingBuffer = "";
             cursorPosition = 0;
-            typingScrollOffset = 0;
+            typingLines = 1;
             currentMessageForDisplay = "";
             isComposingMessage = false;
+            adjustUILayout();
             needsDisplayUpdate = true;
             Serial.println("Typing buffer cleared");
             break;
@@ -1118,6 +1230,9 @@ public:
                             if (cursorPosition > 0 && typingBuffer.length() > 0) {
                                 typingBuffer.remove(cursorPosition - 1, 1);
                                 cursorPosition--;
+                                
+                                // Recalculate lines and adjust UI
+                                adjustUILayout();
                                 needsDisplayUpdate = true;
                             }
                             break;
@@ -1125,19 +1240,28 @@ public:
                         case '\n':
                             typingBuffer += '\n';
                             cursorPosition = typingBuffer.length();
+                            
+                            // Recalculate lines and adjust UI
+                            adjustUILayout();
                             needsDisplayUpdate = true;
                             break;
                             
                         case '\t':
                             typingBuffer += "    ";
                             cursorPosition = typingBuffer.length();
+                            
+                            // Recalculate lines and adjust UI
+                            adjustUILayout();
                             needsDisplayUpdate = true;
                             break;
                             
                         default:
-                            if (typingBuffer.length() < TYPING_MAX_CHARS) {
+                            if (typingBuffer.length() < 500) { // Increased limit for multi-line
                                 typingBuffer += c;
                                 cursorPosition = typingBuffer.length();
+                                
+                                // Recalculate lines and adjust UI
+                                adjustUILayout();
                                 needsDisplayUpdate = true;
                             }
                             break;
@@ -1169,11 +1293,15 @@ void setup() {
     usbHost.begin();
     Serial.println("USB Host ready");
     
+    // Adjust initial UI layout
+    adjustUILayout();
+    
     // Add welcome messages
     addMessageToDisplay("System Ready", false, false);
     addMessageToDisplay("Type message & press Shift+Enter", false, false);
     addMessageToDisplay("Entire message encrypted as ONE", false, false);
     addMessageToDisplay("Press F3 to toggle Persian/English", false, false);
+    addMessageToDisplay("Typing area expands vertically", false, false);
     
     // Draw initial UI
     drawUI();
@@ -1186,23 +1314,29 @@ void setup() {
     Serial.println("Features:");
     Serial.println("1. ENTIRE message encrypted as ONE string");
     Serial.println("2. Only ONE encrypted hex string sent via Serial");
-    Serial.println("3. New messages always start fresh (no continuation)");
-    Serial.println("4. After sending, typing area resets completely");
-    Serial.println("5. Press F3 to toggle between English/Persian");
-    Serial.println("6. Persian letters mapped to English keyboard:");
+    Serial.println("3. All blocks joined together before transmission");
+    Serial.println("4. Receiving side waits for complete hex string");
+    Serial.println("5. Message integrity ensured with padding validation");
+    Serial.println("6. After sending, typing area resets completely");
+    Serial.println("7. Press F3 to toggle between English/Persian");
+    Serial.println("8. Typing area expands VERTICALLY as text grows");
+    Serial.println("9. Persian letters mapped to English keyboard:");
     Serial.println("   a=ش, b=ذ, c=ز, d=ی, e=ث, f=ب, g=ل, h=ا, i=ه, j=ت");
     Serial.println("   k=ن, l=م, m=ک, n=د, o=خ, p=ح, q=ض, r=ق, s=س, t=ف");
     Serial.println("   u=ع, v=ر, w=ص, x=ط, y=غ, z=ظ");
-    Serial.println("7. Special Persian characters:");
-    Serial.println("   \\ = پ (backslash)");
-    Serial.println("   [ = ژ (left bracket)");
-    Serial.println("   ] = چ (right bracket)");
-    Serial.println("   ; = گ (semicolon)");
-    Serial.println("   ' = ک (apostrophe)");
-    Serial.println("   , = و (comma)");
-    Serial.println("   Shift+C = ژ (capital C)");
-    Serial.println("8. NUMBERS AND SYMBOLS WORK IN BOTH MODES");
-    Serial.println("9. In Persian mode: Numbers display LTR (12345) within RTL text");
+    Serial.println("10. Special Persian characters:");
+    Serial.println("    \\ = پ (backslash)");
+    Serial.println("    [ = ژ (left bracket)");
+    Serial.println("    ] = چ (right bracket)");
+    Serial.println("    ; = گ (semicolon)");
+    Serial.println("    ' = ک (apostrophe)");
+    Serial.println("    , = و (comma)");
+    Serial.println("    Shift+C = ژ (capital C)");
+    Serial.println("11. NUMBERS AND SYMBOLS WORK IN BOTH MODES");
+    Serial.println("12. In Persian mode: Numbers display LTR (12345) within RTL text");
+    Serial.println("13. Typing area expands UP TO 5 LINES as needed");
+    Serial.println("\nIMPORTANT: All messages >16 bytes encrypted as ONE hex string");
+    Serial.println("Flutter app MUST send complete encrypted string (no splitting)");
 }
 
 void loop() {
