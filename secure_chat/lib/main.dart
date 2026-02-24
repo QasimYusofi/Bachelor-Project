@@ -10,9 +10,26 @@ import 'package:secure_chat/screens/chat_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+
+  // Set up error handling
+  FlutterError.onError = (FlutterErrorDetails details) {
+    print('Flutter Error: ${details.exception}');
+    print('Stack trace: ${details.stack}');
+  };
+
+  try {
+    // Check if Firebase is already initialized
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+      print('Firebase initialized successfully');
+    } else {
+      print('Firebase already initialized');
+    }
+  } catch (e) {
+    print('Firebase initialization error: $e');
+  }
   runApp(const MyApp());
 }
 
@@ -56,6 +73,31 @@ class AuthWrapper extends StatelessWidget {
     return StreamBuilder(
       stream: firebaseService.authStateChanges,
       builder: (context, snapshot) {
+        print('AuthWrapper State: ${snapshot.connectionState}, HasData: ${snapshot.hasData}, HasError: ${snapshot.hasError}');
+
+        if (snapshot.hasError) {
+          print('AuthWrapper Error: ${snapshot.error}');
+          return Scaffold(
+            body: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text('Authentication Error'),
+                  const SizedBox(height: 16),
+                  Text(snapshot.error.toString(), textAlign: TextAlign.center),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () {
+                      // Refresh by navigating
+                    },
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
@@ -63,9 +105,11 @@ class AuthWrapper extends StatelessWidget {
         }
 
         if (snapshot.hasData) {
+          print('User logged in: ${snapshot.data?.uid}');
           return const HomeScreen();
         }
 
+        print('No user logged in, showing login screen');
         return const LoginScreen();
       },
     );

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:secure_chat/services/firebase_service.dart';
+import 'package:secure_chat/services/serial_service.dart';
+import 'package:flutter_serial_communication/models/device_info.dart';
 
 class ChatScreen extends StatefulWidget {
   final String chatRoomId;
@@ -21,15 +23,77 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _messageController = TextEditingController();
   final _firebaseService = FirebaseService();
+  final _serialService = SerialService();
   late String _currentUserId;
   late String _currentUserName;
+  bool _serialConnected = false;
+  List<DeviceInfo> _availableDevices = [];
+  Set<String> _processedMessageIds = {}; // Track processed messages to avoid duplicates
 
   @override
   void initState() {
     super.initState();
-    _currentUserId = _firebaseService.getCurrentUser()?.uid ?? '';
-    _currentUserName = _firebaseService.getCurrentUser()?.displayName ?? '';
-    print('Chat Screen Initialized - Room: ${widget.chatRoomId}');
+    try {
+      _currentUserId = _firebaseService.getCurrentUser()?.uid ?? '';
+      _currentUserName = _firebaseService.getCurrentUser()?.displayName ?? '';
+      print('Chat Screen Initialized - Room: ${widget.chatRoomId}');
+    } catch (e) {
+      print('ChatScreen initState error: $e');
+      _currentUserId = '';
+      _currentUserName = '';
+    }
+
+    // Setup serial communication listeners
+    _serialService.setupListeners(
+      onMessageReceived: _handleSerialMessage,
+      onConnectionChanged: (isConnected) {
+        setState(() {
+          _serialConnected = isConnected;
+        });
+        if (!isConnected) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('USB Device Disconnected')),
+          );
+        }
+      },
+    );
+  }
+
+  void _handleSerialMessage(String message) {
+    // When serial message is received, send it directly to chat
+    if (message.isNotEmpty) {
+      _sendMessageFromSerial(message);
+    }
+  }
+
+  void _sendMessageFromSerial(String message) async {
+    try {
+      await _firebaseService.sendMessage(
+        chatRoomId: widget.chatRoomId,
+        message: message,
+        senderId: _currentUserId,
+        senderName: _currentUserName,
+      );
+    } catch (e) {
+      print('Error sending serial message: $e');
+    }
+  }
+
+  void _sendReceivedMessageToSerial(String message, String senderName) async {
+    if (!_serialConnected) return;
+
+    try {
+      // Format the message to send to serial device
+      String formattedMessage = '$senderName: $message';
+      bool success = await _serialService.sendMessage(formattedMessage);
+      if (success) {
+        print('Message sent to serial device: $formattedMessage');
+      } else {
+        print('Failed to send message to serial device');
+      }
+    } catch (e) {
+      print('Error sending received message to serial: $e');
+    }
   }
 
   void _sendMessage() async {
@@ -52,19 +116,152 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _connectToUSB() async {
+    try {
+      // Get available devices
+      final devices = await _serialService.getAvailableDevices();
+
+      if (devices.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No USB devices found')),
+          );
+        }
+        return;
+      }
+
+      setState(() {
+        _availableDevices = devices;
+      });
+
+      // Show device selection dialog
+      if (mounted) {
+        _showDeviceSelectionDialog();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    }
+  }
+
+  void _showDeviceSelectionDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Select USB Device'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: _availableDevices.length,
+            itemBuilder: (context, index) {
+              final device = _availableDevices[index];
+              return ListTile(
+                title: Text(device.productName),
+                onTap: () {
+                  Navigator.pop(context);
+                  _connectToDevice(device);
+                },
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+            },
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _connectToDevice(DeviceInfo device) async {
+    try {
+      final isConnected = await _serialService.connect(device);
+
+      if (isConnected) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Connected to ${device.productName}')),
+          );
+        }
+        setState(() {
+          _serialConnected = true;
+        });
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to connect to ${device.productName}')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Connection error: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _disconnectUSB() async {
+    try {
+      await _serialService.disconnect();
+      setState(() {
+        _serialConnected = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('USB Device Disconnected')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Disconnect error: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async {
-        Navigator.of(context).pushReplacementNamed('/home');
-        return false;
+    return PopScope(
+      canPop: true,
+      onPopInvoked: (didPop) async {
+        if (_serialConnected) {
+          await _disconnectUSB();
+        }
+        if (didPop) return;
+        if (mounted) {
+          Navigator.of(context).pushReplacementNamed('/home');
+        }
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(widget.otherUserName),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(widget.otherUserName),
+              if (_serialConnected)
+                Text(
+                  'USB Connected: ${_serialService.selectedDevice?.productName ?? 'Unknown'}',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal),
+                ),
+            ],
+          ),
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
             onPressed: () {
+              if (_serialConnected) {
+                _disconnectUSB();
+              }
               Navigator.of(context).pushReplacementNamed('/home');
             },
           ),
@@ -99,6 +296,24 @@ class _ChatScreenState extends State<ChatScreen> {
                     itemBuilder: (context, index) {
                       DocumentSnapshot message = messages[index];
                       bool isMe = message['senderId'] == _currentUserId;
+
+                      // Check if the message is already processed
+                      if (_processedMessageIds.contains(message.id)) {
+                        return SizedBox.shrink(); // Skip rendering but continue
+                      }
+
+                      // Add the message ID to the processed set
+                      _processedMessageIds.add(message.id);
+
+                      // Send received messages from other users to serial device
+                      if (!isMe) {
+                        Future.microtask(() {
+                          _sendReceivedMessageToSerial(
+                            message['message'] ?? '',
+                            message['senderName'] ?? 'Unknown',
+                          );
+                        });
+                      }
 
                       return Align(
                         alignment:
@@ -151,8 +366,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: TextField(
                       controller: _messageController,
+                      enabled: !_serialConnected,
                       decoration: InputDecoration(
-                        hintText: 'Type a message...',
+                        hintText: _serialConnected
+                            ? 'USB Connected - Messages auto-sent from device'
+                            : 'Type a message...',
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(20),
                         ),
@@ -164,10 +382,32 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
+                  // USB Connection Button
                   FloatingActionButton(
-                    onPressed: _sendMessage,
                     mini: true,
-                    child: const Icon(Icons.send),
+                    onPressed: _serialConnected ? _disconnectUSB : _connectToUSB,
+                    backgroundColor:
+                        _serialConnected ? Colors.green : Colors.orange,
+                    tooltip: _serialConnected ? 'Disconnect USB' : 'Connect USB',
+                    child: Icon(
+                      _serialConnected ? Icons.usb_off : Icons.usb,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // Send Message Button
+                  FloatingActionButton(
+                    mini: true,
+                    onPressed: _serialConnected ? null : _sendMessage,
+                    backgroundColor: _serialConnected
+                        ? Colors.grey
+                        : Colors.blue,
+                    tooltip: _serialConnected
+                        ? 'Disabled when USB connected'
+                        : 'Send message',
+                    child: Icon(
+                      Icons.send,
+                      color: _serialConnected ? Colors.grey[600] : Colors.white,
+                    ),
                   ),
                 ],
               ),
@@ -181,6 +421,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _messageController.dispose();
+    _serialService.dispose();
     super.dispose();
   }
 }

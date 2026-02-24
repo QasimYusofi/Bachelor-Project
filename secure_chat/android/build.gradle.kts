@@ -26,13 +26,3 @@ plugins {
     id("com.google.gms.google-services") version "4.4.4" apply false
 
 }
-buildscript {
-    ext.kotlin_version = '1.9.10'
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath 'com.google.gms:google-services:4.4.0'
-    }
-}

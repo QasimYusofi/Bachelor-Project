@@ -17,8 +17,15 @@ class _UsersScreenState extends State<UsersScreen> {
   @override
   void initState() {
     super.initState();
-    _currentUserId = _firebaseService.getCurrentUser()?.uid ?? '';
-    _currentUserName = _firebaseService.getCurrentUser()?.displayName ?? '';
+    try {
+      _currentUserId = _firebaseService.getCurrentUser()?.uid ?? '';
+      _currentUserName = _firebaseService.getCurrentUser()?.displayName ?? '';
+      print('UsersScreen initialized - UserId: $_currentUserId, UserName: $_currentUserName');
+    } catch (e) {
+      print('UsersScreen initState error: $e');
+      _currentUserId = '';
+      _currentUserName = '';
+    }
   }
 
   Future<void> _handleUserTap(Map<String, dynamic> user) async {

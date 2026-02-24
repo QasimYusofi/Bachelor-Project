@@ -142,13 +142,15 @@ class FirebaseService {
 
   Stream<QuerySnapshot> getChatRooms(String userId) {
     try {
+      print('Getting chat rooms for user: $userId');
       return _firestore
           .collection('chatRooms')
           .where('members', arrayContains: userId)
           .snapshots();
     } catch (e) {
       print('Get chat rooms error: $e');
-      rethrow;
+      // Return empty stream instead of trying to instantiate abstract class
+      return Stream.empty();
     }
   }
 
