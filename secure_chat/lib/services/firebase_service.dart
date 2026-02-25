@@ -176,22 +176,35 @@ class FirebaseService {
   // Delete entire chat room
   Future<void> deleteChatRoom(String chatRoomId) async {
     try {
-      // Delete all messages in the chat room
+      print('Starting deletion of chat room: $chatRoomId');
+
+      // Use batch to ensure all-or-nothing deletion
+      final batch = _firestore.batch();
+
+      // Get all messages in the chat room
       final messagesSnapshot = await _firestore
           .collection('chatRooms')
           .doc(chatRoomId)
           .collection('messages')
           .get();
 
+
+      // Add message deletions to batch
       for (var doc in messagesSnapshot.docs) {
-        await doc.reference.delete();
+        batch.delete(doc.reference);
       }
 
-      // Delete the chat room document
-      await _firestore.collection('chatRooms').doc(chatRoomId).delete();
-      print('Chat room deleted: $chatRoomId');
+      // Add chat room deletion to batch
+      batch.delete(_firestore.collection('chatRooms').doc(chatRoomId));
+
+      // Commit the batch
+      await batch.commit();
+
+    } on FirebaseException catch (e) {
+      print('✗ Firebase error deleting chat room: ${e.code} - ${e.message}');
+      rethrow;
     } catch (e) {
-      print('Delete chat room error: $e');
+      print('✗ Delete chat room error: $e');
       rethrow;
     }
   }

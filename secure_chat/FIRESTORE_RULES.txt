@@ -22,7 +22,13 @@ service cloud.firestore {
         allow create: if request.auth != null &&
                          request.auth.uid == request.resource.data.senderId &&
                          request.auth.uid in get(/databases/$(database)/documents/chatRooms/$(chatRoomId)).data.members;
-        allow update, delete: if request.auth != null && request.auth.uid == resource.data.senderId;
+        // Allow the message sender OR any chat room member to update/delete a message.
+        // This permits a chat member to delete messages when they remove the entire chat room
+        // (client-side batched deletes), while still requiring sender identity for single-message deletes.
+        allow update, delete: if request.auth != null && (
+          request.auth.uid == resource.data.senderId ||
+          request.auth.uid in get(/databases/$(database)/documents/chatRooms/$(chatRoomId)).data.members
+        );
       }
     }
   }
