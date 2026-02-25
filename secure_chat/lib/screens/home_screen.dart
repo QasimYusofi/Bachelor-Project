@@ -28,6 +28,64 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _deleteChatRoom(String chatRoomId, String otherUserName) async {
+    // Show a snackbar while deleting
+    final snackbar = ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Deleting chat with $otherUserName...'),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+
+    try {
+      // Wait for the snackbar to show
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Delete the chat room
+      await _firebaseService.deleteChatRoom(chatRoomId);
+
+      // Hide the snackbar
+      snackbar.close();
+    } catch (e) {
+      // Hide the snackbar
+      snackbar.close();
+
+      // Show error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error deleting chat: $e'),
+          duration: const Duration(seconds: 2),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  void _showDeleteConfirmation(String chatRoomId, String otherUserName) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Chat'),
+        content: Text('Are you sure you want to delete the chat with $otherUserName?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _deleteChatRoom(chatRoomId, otherUserName);
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -154,19 +212,64 @@ class _HomeScreenState extends State<HomeScreen> {
                         ? memberNames[otherUserIndex]
                         : 'Unknown';
 
-                    return ListTile(
-                      title: Text(otherUserName),
-                      subtitle: Text(chatRoom['lastMessage'] ?? 'No messages yet'),
-                      onTap: () {
-                        Navigator.of(context).pushNamed(
-                          '/chat',
-                          arguments: {
-                            'chatRoomId': chatRoom.id,
-                            'otherUserId': otherUserId,
-                            'otherUserName': otherUserName,
-                          },
-                        );
+                    return Dismissible(
+                      key: Key(chatRoom.id),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        color: Colors.red,
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 20),
+                        child: const Icon(Icons.delete, color: Colors.white),
+                      ),
+                      onDismissed: (direction) {
+                        _deleteChatRoom(chatRoom.id, otherUserName);
                       },
+                      child: Card(
+                        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        elevation: 2,
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            child: Text(
+                              otherUserName.isNotEmpty ? otherUserName[0].toUpperCase() : '?',
+                            ),
+                          ),
+                          title: Text(
+                            otherUserName,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: Text(
+                            chatRoom['lastMessage'] ?? 'No messages yet',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: PopupMenuButton(
+                            itemBuilder: (context) => [
+                              PopupMenuItem(
+                                child: const Row(
+                                  children: [
+                                    Icon(Icons.delete, color: Colors.red),
+                                    SizedBox(width: 10),
+                                    Text('Delete Chat'),
+                                  ],
+                                ),
+                                onTap: () {
+                                  _showDeleteConfirmation(chatRoom.id, otherUserName);
+                                },
+                              ),
+                            ],
+                          ),
+                          onTap: () {
+                            Navigator.of(context).pushNamed(
+                              '/chat',
+                              arguments: {
+                                'chatRoomId': chatRoom.id,
+                                'otherUserId': otherUserId,
+                                'otherUserName': otherUserName,
+                              },
+                            );
+                          },
+                        ),
+                      ),
                     );
                   },
                 );

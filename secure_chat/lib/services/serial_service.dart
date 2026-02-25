@@ -48,11 +48,40 @@ class SerialService {
           .getDeviceConnectionListener()
           .receiveBroadcastStream()
           .listen((event) {
-        _isConnected = event;
+        // Defensive handling: the plugin may emit different types (bool, Map, null)
+        // Log the raw event for debugging.
+        print('Device connection event: $event (type: ${event.runtimeType})');
+
+        bool newConnectedState = false;
+
+        if (event is bool) {
+          newConnectedState = event;
+        } else if (event == null) {
+          newConnectedState = false;
+        } else if (event is Map) {
+          // If a Map is emitted, assume it's a connect event with device info
+          // Treat this as connected. If the plugin uses a different shape, adjust later.
+          newConnectedState = true;
+        } else if (event is int) {
+          // Some plugins use integer codes (1/0)
+          newConnectedState = event != 0;
+        } else {
+          // Fallback: try to parse a truthy string
+          try {
+            final s = event.toString().toLowerCase();
+            if (s == 'true' || s == '1') newConnectedState = true;
+          } catch (_) {
+            newConnectedState = false;
+          }
+        }
+
+        _isConnected = newConnectedState;
+
         if (!_isConnected) {
           _selectedDevice = null;
           _serialBuffer = '';
         }
+
         _onConnectionChanged?.call(_isConnected);
       }, onError: (error) {
         print('Device connection listener error: $error');
@@ -114,13 +143,36 @@ class SerialService {
     try {
       bool isConnectionSuccess =
           await _flutterSerialCommunication.connect(deviceInfo, 115200);
+
+      // If the connect call returned true, update local state and notify listeners.
       if (isConnectionSuccess) {
         _selectedDevice = deviceInfo;
         _serialBuffer = '';
+        _isConnected = true; // proactively set connected
+        _onConnectionChanged?.call(true);
+
+        // Wait a short moment for native side to be ready before sending any test bytes
+        await Future.delayed(const Duration(milliseconds: 200));
+
+        // Send an initial test payload (optional). Keep this non-blocking for connect callers.
+        try {
+          final bytes = Uint8List.fromList(utf8.encode("connected\n"));
+          bool isMessageSent = await _attemptWrite(bytes);
+          print('Initial test message sent: $isMessageSent');
+        } catch (e) {
+          print('Initial test message write failed (non-fatal): $e');
+        }
+      } else {
+        // If connect reported false, ensure internal state reflects that
+        _isConnected = false;
+        _selectedDevice = null;
       }
+
       return isConnectionSuccess;
     } catch (e) {
       print('Error connecting to device: $e');
+      _isConnected = false;
+      _selectedDevice = null;
       return false;
     }
   }
@@ -132,20 +184,69 @@ class SerialService {
       _isConnected = false;
       _selectedDevice = null;
       _serialBuffer = '';
+      _onConnectionChanged?.call(false);
     } catch (e) {
       print('Error disconnecting: $e');
+    }
+  }
+
+  // Helper: print bytes as hex
+  String _bytesToHex(Uint8List bytes) {
+    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+  }
+
+  // Attempt to write bytes with retries and fallbacks
+  Future<bool> _attemptWrite(Uint8List bytes) async {
+    try {
+      print('Attempting write (${bytes.length} bytes): ${_bytesToHex(bytes)}');
+      bool result = await _flutterSerialCommunication.write(bytes);
+      print('Write returned: $result');
+
+      if (result) return true;
+
+      // Retry once with CRLF appended (some devices expect CRLF)
+      final withCrLf = Uint8List.fromList(bytes + Uint8List.fromList([13, 10]));
+      print('Retrying with CRLF: ${_bytesToHex(withCrLf)}');
+      result = await _flutterSerialCommunication.write(withCrLf);
+      print('Write with CRLF returned: $result');
+      if (result) return true;
+
+      // Last resort: send bytes one-by-one
+      print('Attempting byte-by-byte write');
+      for (var b in bytes) {
+        final single = Uint8List.fromList([b]);
+        bool r = await _flutterSerialCommunication.write(single);
+        if (!r) {
+          print('Byte write failed for ${b.toRadixString(16)}');
+          return false;
+        }
+      }
+
+      return true;
+    } catch (e) {
+      print('Write attempt error: $e');
+      return false;
     }
   }
 
   // Send message to serial device
   Future<bool> sendMessage(String message) async {
     try {
-      String messageToSend = '$message\n';
-      bool isMessageSent = await _flutterSerialCommunication
-          .write(Uint8List.fromList(utf8.encode(messageToSend)));
+      String messageToSend = message.endsWith('\n') ? message : '$message\n';
+      print('SerialService: sending -> "$messageToSend" (connected: $_isConnected)');
+
+      // If not marked connected, attempt to continue but warn
+      if (!_isConnected) {
+        print('Warning: attempting to write while SerialService reports not connected. The plugin may still send bytes if native state is connected.');
+      }
+
+      final bytes = Uint8List.fromList(utf8.encode(messageToSend));
+      bool isMessageSent = await _attemptWrite(bytes);
+
+      print('SerialService: final write result -> $isMessageSent');
       return isMessageSent;
     } catch (e) {
-      print('Error sending message: $e');
+      print('SerialService: write error -> $e');
       return false;
     }
   }

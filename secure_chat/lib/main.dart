@@ -51,11 +51,32 @@ class MyApp extends StatelessWidget {
         '/home': (context) => const HomeScreen(),
         '/users': (context) => const UsersScreen(),
         '/chat': (context) {
-          final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>;
+          final args = ModalRoute.of(context)?.settings.arguments;
+
+          // Handle null arguments (when refreshing directly on chat screen)
+          if (args == null || args is! Map<String, dynamic>) {
+            return Scaffold(
+              appBar: AppBar(title: const Text('Error')),
+              body: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text('Invalid chat parameters'),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: () => Navigator.of(context).pushReplacementNamed('/home'),
+                      child: const Text('Go to Home'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+
           return ChatScreen(
-            chatRoomId: args['chatRoomId'],
-            otherUserId: args['otherUserId'],
-            otherUserName: args['otherUserName'],
+            chatRoomId: args['chatRoomId'] ?? '',
+            otherUserId: args['otherUserId'] ?? '',
+            otherUserName: args['otherUserName'] ?? 'Unknown',
           );
         },
       },

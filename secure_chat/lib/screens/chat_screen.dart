@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:secure_chat/services/firebase_service.dart';
 import 'package:secure_chat/services/serial_service.dart';
 import 'package:flutter_serial_communication/models/device_info.dart';
+import 'dart:async';
+import 'package:flutter/services.dart';
 
 class ChatScreen extends StatefulWidget {
   final String chatRoomId;
@@ -29,6 +31,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _serialConnected = false;
   List<DeviceInfo> _availableDevices = [];
   Set<String> _processedMessageIds = {}; // Track processed messages to avoid duplicates
+  late StreamSubscription<QuerySnapshot> _messageSubscription; // Listen to message changes
 
   @override
   void initState() {
@@ -57,6 +60,37 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       },
     );
+
+    // Setup Firestore listener to detect new messages and send to serial
+    _setupMessageListener();
+  }
+
+  void _setupMessageListener() {
+    _messageSubscription = _firebaseService
+        .getMessages(widget.chatRoomId)
+        .listen((snapshot) {
+      // Process each document change
+      for (var change in snapshot.docChanges) {
+        if (change.type == DocumentChangeType.added) {
+          final message = change.doc;
+          final isMe = message['senderId'] == _currentUserId;
+          final messageId = message.id;
+
+          // Check if this is a new message we haven't processed
+          if (!_processedMessageIds.contains(messageId)) {
+            _processedMessageIds.add(messageId);
+
+            // Send to serial only if it's from another user
+            if (!isMe && _serialConnected) {
+              _sendReceivedMessageToSerial(
+                message['message'] ?? '',
+                message['senderName'] ?? 'Unknown',
+              );
+            }
+          }
+        }
+      }
+    });
   }
 
   void _handleSerialMessage(String message) {
@@ -80,19 +114,25 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _sendReceivedMessageToSerial(String message, String senderName) async {
-    if (!_serialConnected) return;
+    if (!_serialConnected) {
+      print('Serial not connected, skipping message send');
+      return;
+    }
 
     try {
-      // Format the message to send to serial device
-      String formattedMessage = '$senderName: $message';
+      // Format the message to send to serial device - simple format
+      String formattedMessage = '$message';
+      print('Attempting to send to serial: $formattedMessage');
+
       bool success = await _serialService.sendMessage(formattedMessage);
+
       if (success) {
-        print('Message sent to serial device: $formattedMessage');
+        print('✓ Message successfully sent to serial device: $formattedMessage');
       } else {
-        print('Failed to send message to serial device');
+        print('✗ Failed to send message to serial device');
       }
     } catch (e) {
-      print('Error sending received message to serial: $e');
+      print('✗ Error sending received message to serial: $e');
     }
   }
 
@@ -186,6 +226,9 @@ class _ChatScreenState extends State<ChatScreen> {
       final isConnected = await _serialService.connect(device);
 
       if (isConnected) {
+
+        // Send "connected" message to the serial device
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Connected to ${device.productName}')),
@@ -230,11 +273,73 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  void _showMessageOptions(BuildContext context, String messageId, String messageContent, bool isMe) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.copy),
+                title: const Text('Copy Message'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _copyMessageToClipboard(messageContent);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete),
+                title: const Text('Delete Message'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _deleteMessage(messageId, isMe);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _copyMessageToClipboard(String messageContent) {
+    Clipboard.setData(ClipboardData(text: messageContent)).then((_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Message copied to clipboard')),
+      );
+    });
+  }
+
+  void _deleteMessage(String messageId, bool isMe) {
+    // Only allow deletion if the message is sent by the current user
+    if (isMe) {
+      _firebaseService.deleteMessage(
+        chatRoomId: widget.chatRoomId,
+        messageId: messageId,
+      ).then((_) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Message deleted')),
+        );
+      }).catchError((error) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error deleting message: $error')),
+        );
+      });
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot delete this message')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
       canPop: true,
-      onPopInvoked: (didPop) async {
+      onPopInvokedWithResult: (didPop, result) async {
         if (_serialConnected) {
           await _disconnectUSB();
         }
@@ -296,61 +401,49 @@ class _ChatScreenState extends State<ChatScreen> {
                     itemBuilder: (context, index) {
                       DocumentSnapshot message = messages[index];
                       bool isMe = message['senderId'] == _currentUserId;
-
-                      // Check if the message is already processed
-                      if (_processedMessageIds.contains(message.id)) {
-                        return SizedBox.shrink(); // Skip rendering but continue
-                      }
-
-                      // Add the message ID to the processed set
-                      _processedMessageIds.add(message.id);
-
-                      // Send received messages from other users to serial device
-                      if (!isMe) {
-                        Future.microtask(() {
-                          _sendReceivedMessageToSerial(
-                            message['message'] ?? '',
-                            message['senderName'] ?? 'Unknown',
-                          );
-                        });
-                      }
+                      String messageId = message.id;
 
                       return Align(
                         alignment:
                             isMe ? Alignment.centerRight : Alignment.centerLeft,
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(
-                            vertical: 4,
-                            horizontal: 8,
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                            vertical: 8,
-                            horizontal: 12,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isMe ? Colors.blue : Colors.grey[300],
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: isMe
-                                ? CrossAxisAlignment.end
-                                : CrossAxisAlignment.start,
-                            children: [
-                              if (!isMe)
+                        child: GestureDetector(
+                          onLongPress: () {
+                            _showMessageOptions(context, messageId, message['message'] ?? '', isMe);
+                          },
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(
+                              vertical: 4,
+                              horizontal: 8,
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 8,
+                              horizontal: 12,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isMe ? Colors.blue : Colors.grey[300],
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: isMe
+                                  ? CrossAxisAlignment.end
+                                  : CrossAxisAlignment.start,
+                              children: [
+                                if (!isMe)
+                                  Text(
+                                    message['senderName'] ?? 'Unknown',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                    ),
+                                  ),
                                 Text(
-                                  message['senderName'] ?? 'Unknown',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12,
+                                  message['message'] ?? '',
+                                  style: TextStyle(
+                                    color: isMe ? Colors.white : Colors.black,
                                   ),
                                 ),
-                              Text(
-                                message['message'] ?? '',
-                                style: TextStyle(
-                                  color: isMe ? Colors.white : Colors.black,
-                                ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       );
@@ -422,6 +515,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _messageController.dispose();
     _serialService.dispose();
+    _messageSubscription.cancel(); // Cancel the Firestore subscription
     super.dispose();
   }
 }

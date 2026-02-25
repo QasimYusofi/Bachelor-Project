@@ -154,6 +154,48 @@ class FirebaseService {
     }
   }
 
+  // Delete a specific message
+  Future<void> deleteMessage({
+    required String chatRoomId,
+    required String messageId,
+  }) async {
+    try {
+      await _firestore
+          .collection('chatRooms')
+          .doc(chatRoomId)
+          .collection('messages')
+          .doc(messageId)
+          .delete();
+      print('Message deleted: $messageId');
+    } catch (e) {
+      print('Delete message error: $e');
+      rethrow;
+    }
+  }
+
+  // Delete entire chat room
+  Future<void> deleteChatRoom(String chatRoomId) async {
+    try {
+      // Delete all messages in the chat room
+      final messagesSnapshot = await _firestore
+          .collection('chatRooms')
+          .doc(chatRoomId)
+          .collection('messages')
+          .get();
+
+      for (var doc in messagesSnapshot.docs) {
+        await doc.reference.delete();
+      }
+
+      // Delete the chat room document
+      await _firestore.collection('chatRooms').doc(chatRoomId).delete();
+      print('Chat room deleted: $chatRoomId');
+    } catch (e) {
+      print('Delete chat room error: $e');
+      rethrow;
+    }
+  }
+
   User? getCurrentUser() {
     return _auth.currentUser;
   }
